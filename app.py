@@ -174,7 +174,8 @@ if st.session_state.market_data is not None:
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df.index, y=df['Cumulative_Vol'], name='Realized'))
         if implied_vol_val > 0:
-             fig.add_hline(y=implied_vol_val, line_dash="dash", color="red", annotation_text="Implied Strike")
+             # FIX: Changed 'color' to 'line_color'
+             fig.add_hline(y=implied_vol_val, line_dash="dash", line_color="red", annotation_text="Implied Strike")
         st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
@@ -201,7 +202,7 @@ if st.session_state.market_data is not None:
             
             m1, m2 = st.columns(2)
             m1.metric("Vol Swap P&L", f"${vol_pnl:,.0f}")
-            m2.metric("Variance Swap P&L", f"${var_pnl:,.0f}", delta=f"{var_pnl-vol_pnl:,.0f} vs Vol Swap")
+            m2.metric("Variance Swap P&L", f"${var_pnl:,.0f}", delta=f"${var_pnl-vol_pnl:,.0f} vs Vol Swap")
             
             # Chart
             x = np.linspace(max(0, K-20), K+30, 100)
@@ -211,7 +212,10 @@ if st.session_state.market_data is not None:
             fig3 = go.Figure()
             fig3.add_trace(go.Scatter(x=x, y=y_vol, name='Vol Swap', line=dict(dash='dash')))
             fig3.add_trace(go.Scatter(x=x, y=y_var, name='Var Swap', line=dict(width=3)))
-            fig3.add_vline(x=sim_vol, color="green", annotation_text="Forecast")
+            
+            # FIX: Changed 'color' to 'line_color'
+            fig3.add_vline(x=sim_vol, line_color="green", annotation_text="Forecast")
+            
             fig3.update_layout(xaxis_title="Vol", yaxis_title="P&L")
             st.plotly_chart(fig3, use_container_width=True)
         else:
