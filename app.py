@@ -15,15 +15,24 @@ if 'option_chain' not in st.session_state:
     st.session_state.option_chain = None
 if 'last_fetch_time' not in st.session_state:
     st.session_state.last_fetch_time = None
+if 'available_expirations' not in st.session_state:
+    st.session_state.available_expirations = []
 
 # --- HELPER FUNCTIONS ---
+
+def get_expirations(ticker):
+    """Fetches the list of valid expiration dates for a ticker."""
+    try:
+        tk = yf.Ticker(ticker)
+        return tk.options  # Returns a tuple of strings 'YYYY-MM-DD'
+    except Exception:
+        return []
 
 def fetch_market_data(ticker, start_date, end_date):
     """Fetches historical underlying data and handles MultiIndex issues."""
     try:
         df = yf.download(ticker, start=start_date, end=end_date, progress=False)
         
-        # FIX: Flatten MultiIndex columns if present
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
@@ -39,17 +48,14 @@ def fetch_market_data(ticker, start_date, end_date):
         st.error(f"Error fetching market data: {e}")
         return None
 
-# --- THIS WAS THE MISSING FUNCTION ---
 def fetch_option_chain(ticker, expiry_date):
     """Fetches the full option chain (calls and puts) for a specific expiration."""
     tk = yf.Ticker(ticker)
     try:
-        # Get specific chain
         chain = tk.option_chain(expiry_date)
         calls = chain.calls
         puts = chain.puts
         
-        # Get Current Spot Price
         history = tk.history(period="1d")
         if history.empty:
             return None, None, None
@@ -59,20 +65,15 @@ def fetch_option_chain(ticker, expiry_date):
     except Exception as e:
         st.error(f"Error fetching options: {e}")
         return None, None, None
-# -------------------------------------
 
 def calculate_vix_style_variance(calls, puts, spot_price, days_to_expiry, risk_free_rate=0.045):
-    """
-    Approximates the Variance Swap Strike (Fair Volatility) using the VIX methodology.
-    """
+    """Approximates the Variance Swap Strike (Fair Volatility)."""
     T = days_to_expiry / 365.0
     if T <= 0: return 0, pd.DataFrame()
     
-    # 1. Select OTM Options
     otm_puts = puts[puts['strike'] < spot_price].copy()
     otm_calls = calls[calls['strike'] > spot_price].copy()
     
-    # 2. Calculate Mid Price
     otm_puts['bid'] = otm_puts['bid'].fillna(0)
     otm_puts['ask'] = otm_puts['ask'].fillna(0)
     otm_puts['price'] = (otm_puts['bid'] + otm_puts['ask']) / 2
@@ -83,11 +84,9 @@ def calculate_vix_style_variance(calls, puts, spot_price, days_to_expiry, risk_f
     otm_calls['price'] = (otm_calls['bid'] + otm_calls['ask']) / 2
     otm_calls.loc[otm_calls['price'] == 0, 'price'] = otm_calls['lastPrice']
     
-    # 3. Merge and Sort
     df_opts = pd.concat([otm_puts[['strike', 'price']], otm_calls[['strike', 'price']]])
     df_opts = df_opts.sort_values('strike')
     
-    # 4. Calculate Contributions
     df_opts['delta_k'] = df_opts['strike'].diff().shift(-1).fillna(0)
     df_opts['contribution'] = (df_opts['delta_k'] / (df_opts['strike']**2)) * np.exp(risk_free_rate * T) * df_opts['price']
     
@@ -98,22 +97,32 @@ def calculate_vix_style_variance(calls, puts, spot_price, days_to_expiry, risk_f
 # --- MAIN APP UI ---
 
 st.title("⚡ Variance Swap: Pricing vs. Realized")
-st.markdown("Compare the **Implied Volatility** (what the market expects) vs. **Realized Volatility** (what actually happened).")
 
 # SIDEBAR
 with st.sidebar:
     st.header("1. Asset Selection")
     ticker = st.text_input("Ticker", value="SPY")
     
+    # --- NEW: EXPIRATION FETCHING LOGIC ---
+    if st.button("Check Available Expirations"):
+        exps = get_expirations(ticker)
+        if exps:
+            st.session_state.available_expirations = list(exps)
+            st.success(f"Found {len(exps)} expirations!")
+        else:
+            st.error("No options found. Check ticker.")
+    
+    # Dropdown logic
+    if st.session_state.available_expirations:
+        expiry_date = st.selectbox("Select Expiry", st.session_state.available_expirations)
+    else:
+        # Fallback if user hasn't clicked "Check" yet
+        expiry_date = st.text_input("Or Type Expiry (YYYY-MM-DD)", value="2024-12-20")
+    # --------------------------------------
+
     st.header("2. Historical Simulation")
     start_date = st.date_input("History Start", value=pd.to_datetime("2023-01-01"))
     end_date = st.date_input("History End", value=pd.to_datetime("2023-12-31"))
-    
-    st.header("3. Live Pricing Params")
-    # Default to approx 30 days out
-    default_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-    expiry_date = st.text_input("Target Expiry (YYYY-MM-DD)", value=default_date)
-    st.caption("Note: Must be a valid expiry date for the ticker.")
     
     st.divider()
     fetch_btn = st.button("🚀 ANALYZE / REFRESH DATA", type="primary")
@@ -121,23 +130,18 @@ with st.sidebar:
 # --- LOGIC CONTROLLER ---
 
 if fetch_btn:
-    with st.spinner('Fetching market data and option chains...'):
-        # 1. Fetch Historical
+    with st.spinner('Fetching market data...'):
         hist_data = fetch_market_data(ticker, start_date, end_date)
         st.session_state.market_data = hist_data
         
-        # 2. Fetch Option Chain
         calls, puts, spot = fetch_option_chain(ticker, expiry_date)
         
         if calls is not None and not calls.empty:
             st.session_state.option_chain = {
-                'calls': calls,
-                'puts': puts,
-                'spot': spot,
-                'expiry': expiry_date
+                'calls': calls, 'puts': puts, 'spot': spot, 'expiry': expiry_date
             }
         else:
-            st.warning(f"Could not fetch options for {expiry_date}. Check if date is valid for {ticker} on Yahoo Finance.")
+            st.warning(f"Could not fetch options for {expiry_date}.")
             st.session_state.option_chain = None
             
         st.session_state.last_fetch_time = datetime.now().strftime("%H:%M:%S")
@@ -147,14 +151,12 @@ if fetch_btn:
 if st.session_state.market_data is not None:
     df = st.session_state.market_data
     
-    # Realized Vol
     annualization_factor = 252
     df['Squared_Returns'] = df['Log_Return'] ** 2
     df['Cumulative_Var'] = df['Squared_Returns'].cumsum() * (annualization_factor / np.arange(1, len(df) + 1))
     df['Cumulative_Vol'] = np.sqrt(df['Cumulative_Var']) * 100
     realized_vol = df['Cumulative_Vol'].iloc[-1]
 
-    # Implied Vol
     implied_vol_print = "N/A"
     fair_strike_df = pd.DataFrame()
     
@@ -173,9 +175,8 @@ if st.session_state.market_data is not None:
             else:
                 st.warning("Selected expiration date has passed.")
         except ValueError:
-            st.error("Invalid date format. Use YYYY-MM-DD.")
+            st.error("Invalid date format.")
 
-    # Dashboard
     st.write(f"Last Update: {st.session_state.last_fetch_time}")
     
     col1, col2, col3 = st.columns(3)
