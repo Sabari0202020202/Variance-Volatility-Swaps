@@ -20,34 +20,27 @@ if 'last_fetch_time' not in st.session_state:
 # --- HELPER FUNCTIONS ---
 
 def fetch_market_data(ticker, start_date, end_date):
-    """Fetches historical underlying data for the realized volatility calculation."""
-    df = yf.download(ticker, start=start_date, end=end_date, progress=False)
-    if not df.empty:
-        # Calculate Log Returns
-        df['Log_Return'] = np.log(df['Adj Close'] / df['Adj Close'].shift(1))
-        df = df.dropna()
-    return df
-
-def fetch_option_chain(ticker, expiry_date):
-    """Fetches the full option chain (calls and puts) for a specific expiration."""
-    tk = yf.Ticker(ticker)
+    """Fetches historical underlying data and handles MultiIndex issues."""
     try:
-        # Get specific chain
-        chain = tk.option_chain(expiry_date)
-        calls = chain.calls
-        puts = chain.puts
+        df = yf.download(ticker, start=start_date, end=end_date, progress=False)
         
-        # Get Current Spot Price (approximate from last close if live price unavailable)
-        history = tk.history(period="1d")
-        if history.empty:
-            return None, None
-        spot_price = history['Close'].iloc[-1]
-        
-        return calls, puts, spot_price
+        # FIX: Flatten MultiIndex columns if present (e.g., ('Adj Close', 'SPY') -> 'Adj Close')
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        if not df.empty and 'Adj Close' in df.columns:
+            # Calculate Log Returns
+            df['Log_Return'] = np.log(df['Adj Close'] / df['Adj Close'].shift(1))
+            return df.dropna()
+        elif not df.empty and 'Close' in df.columns:
+             # Fallback to Close if Adj Close is missing
+            df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
+            return df.dropna()
+        else:
+            return None
     except Exception as e:
-        st.error(f"Error fetching options: {e}")
-        return None, None, None
-
+        st.error(f"Error fetching market data: {e}")
+        return None
 def calculate_vix_style_variance(calls, puts, spot_price, days_to_expiry, risk_free_rate=0.045):
     """
     Approximates the Variance Swap Strike (Fair Volatility) using the VIX methodology:
