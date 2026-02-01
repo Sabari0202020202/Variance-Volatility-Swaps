@@ -184,39 +184,77 @@ if st.session_state.market_data is not None:
              # (Re-run calc just for charting if needed, or store it. Keeping it simple here)
         else:
              st.info("No option chain data available. (Using Manual IV)")
-
+    # TAB 3: P&L Simulator (Updated with "Show Work")
     with tab3:
         if implied_vol_val > 0:
-            st.markdown("### P&L Simulator")
+            st.markdown("### 🔮 Trade Simulator")
+            
+            # 1. Inputs
             col_a, col_b, col_c = st.columns(3)
-            with col_a: vega_notional = st.number_input("Vega Notional ($)", 10000, step=1000)
-            with col_b: position = st.radio("Side", ["Long", "Short"], horizontal=True)
-            with col_c: sim_vol = st.slider("Simulated Vol", 0.0, 100.0, realized_vol)
+            with col_a: 
+                vega_notional = st.number_input("Vega Notional ($ payout per 1% diff)", value=10000, step=1000)
+            with col_b: 
+                position = st.radio("Your Position", ["Long (Buy Vol)", "Short (Sell Vol)"], horizontal=True)
+            with col_c: 
+                sim_vol = st.slider("Future Realized Volatility (%)", min_value=0.0, max_value=100.0, value=realized_vol, step=0.1)
             
-            K = implied_vol_val
-            direction = 1 if position == "Long" else -1
+            # 2. Variables
+            K = implied_vol_val          # The Strike (Entry Price)
+            sigma_R = sim_vol            # The Settlement (Future Reality)
+            direction = 1 if position == "Long (Buy Vol)" else -1
             
-            vol_pnl = vega_notional * (sim_vol - K) * direction
+            # 3. Calculations
+            # Vol Swap (Linear)
+            vol_pnl = vega_notional * (sigma_R - K) * direction
+            
+            # Variance Swap (Convex)
+            # Variance Notional = Vega Notional / (2 * Strike)
             var_notional = vega_notional / (2 * K)
-            var_pnl = var_notional * (sim_vol**2 - K**2) * direction
+            # Payout = Var_Notional * (Realized^2 - Strike^2)
+            var_pnl = var_notional * (sigma_R**2 - K**2) * direction
             
+            # 4. Scoreboard
+            st.divider()
             m1, m2 = st.columns(2)
-            m1.metric("Vol Swap P&L", f"${vol_pnl:,.0f}")
+            m1.metric("Vol Swap P&L", f"${vol_pnl:,.0f}", delta_color="normal")
             m2.metric("Variance Swap P&L", f"${var_pnl:,.0f}", delta=f"${var_pnl-vol_pnl:,.0f} vs Vol Swap")
-            
-            # Chart
+
+            # 5. "Show Your Work" Section (NEW)
+            with st.expander("📝 See Calculation Logic", expanded=True):
+                st.markdown(f"""
+                **1. The Setup**
+                * **Strike (Entry Price):** `{K:.2f}` (Implied Vol)
+                * **Result (Exit Price):** `{sigma_R:.2f}` (Simulated Vol)
+                * **Difference:** `{sigma_R - K:.2f}` points
+                
+                **2. Volatility Swap Math (Linear)**
+                * Formula: $N_{{vega}} \\times (\\sigma_{{realized}} - K_{{strike}}) \\times Direction$
+                * Math: `${vega_notional:,.0f} \\times ({sigma_R:.2f} - {K:.2f}) \\times {direction}$
+                * **Result:** `${vol_pnl:,.2f}`
+                
+                **3. Variance Swap Math (Convex)**
+                * *Step A: Convert Vega Notional to Variance Notional*
+                    * $N_{{var}} = \\frac{{N_{{vega}}}}{{2 \\times K}} = \\frac{{{vega_notional}}}{{2 \\times {K:.2f}}} = {var_notional:.2f}$
+                * *Step B: Calculate Squared Deviation*
+                    * Formula: $N_{{var}} \\times (\\sigma^2_{{realized}} - K^2_{{strike}})$
+                    * Math: `{var_notional:.2f}` $\\times$ `({sigma_R:.2f}^2 - {K:.2f}^2)`
+                    * Math: `{var_notional:.2f}` $\\times$ `({sigma_R**2:.2f} - {K**2:.2f})`
+                * **Result:** `${var_pnl:,.2f}`
+                """)
+
+            # 6. Chart
+            st.markdown("#### Payout Profile")
             x = np.linspace(max(0, K-20), K+30, 100)
             y_vol = [vega_notional * (i - K) * direction for i in x]
             y_var = [var_notional * (i**2 - K**2) * direction for i in x]
             
             fig3 = go.Figure()
-            fig3.add_trace(go.Scatter(x=x, y=y_vol, name='Vol Swap', line=dict(dash='dash')))
-            fig3.add_trace(go.Scatter(x=x, y=y_var, name='Var Swap', line=dict(width=3)))
-            
-            # FIX: Changed 'color' to 'line_color'
+            fig3.add_trace(go.Scatter(x=x, y=y_vol, name='Vol Swap (Linear)', line=dict(dash='dash')))
+            fig3.add_trace(go.Scatter(x=x, y=y_var, name='Var Swap (Convex)', line=dict(width=3)))
             fig3.add_vline(x=sim_vol, line_color="green", annotation_text="Forecast")
-            
-            fig3.update_layout(xaxis_title="Vol", yaxis_title="P&L")
+            fig3.update_layout(xaxis_title="Realized Volatility (%)", yaxis_title="Profit / Loss ($)")
             st.plotly_chart(fig3, use_container_width=True)
+            
         else:
-            st.warning("Enter Manual IV in sidebar to unlock simulation.")
+            st.warning("Please enter a 'Manual Implied Vol' in the sidebar or select a valid ticker to unlock the simulator.")
+    
